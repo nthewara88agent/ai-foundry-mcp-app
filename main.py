@@ -1,23 +1,15 @@
 """
 Azure AI Foundry + MCP Integration
 
-A Python application that uses Azure AI Foundry (GPT-5) with
+A Python application that uses Azure OpenAI with
 Microsoft Learn MCP Server for tool calling.
 """
 
 import os
 import json
 from dotenv import load_dotenv
-from azure.ai.inference import ChatCompletionsClient
-from azure.ai.inference.models import (
-    SystemMessage,
-    UserMessage,
-    AssistantMessage,
-    ToolMessage,
-    ChatCompletionsToolDefinition,
-    FunctionDefinition,
-)
-from azure.identity import DefaultAzureCredential
+from openai import AzureOpenAI
+from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 
 from mcp_client import MCPClient
 
@@ -30,17 +22,21 @@ class AIFoundryMCPAgent:
     def __init__(self):
         # Azure AI Foundry setup
         endpoint = os.getenv("AZURE_AI_ENDPOINT")
-        deployment = os.getenv("AZURE_AI_DEPLOYMENT", "gpt-5.1")
+        deployment = os.getenv("AZURE_AI_DEPLOYMENT", "gpt-4o-mini")
         
         if not endpoint:
             raise ValueError("AZURE_AI_ENDPOINT environment variable is required")
 
         # Use DefaultAzureCredential for authentication
-        credential = DefaultAzureCredential()
+        token_provider = get_bearer_token_provider(
+            DefaultAzureCredential(),
+            "https://cognitiveservices.azure.com/.default"
+        )
         
-        self.ai_client = ChatCompletionsClient(
-            endpoint=endpoint,
-            credential=credential,
+        self.ai_client = AzureOpenAI(
+            azure_endpoint=endpoint,
+            azure_ad_token_provider=token_provider,
+            api_version="2024-10-21"
         )
         self.deployment = deployment
 
@@ -53,19 +49,18 @@ class AIFoundryMCPAgent:
         # Conversation history
         self.messages = []
 
-    def _get_tools(self) -> list[ChatCompletionsToolDefinition]:
-        """Get MCP tools formatted for Azure AI."""
+    def _get_tools(self) -> list:
+        """Get MCP tools formatted for Azure OpenAI."""
         tools = []
         for tool in self.mcp_client._tools:
-            tools.append(
-                ChatCompletionsToolDefinition(
-                    function=FunctionDefinition(
-                        name=tool["name"],
-                        description=tool.get("description", ""),
-                        parameters=tool.get("inputSchema", {"type": "object", "properties": {}})
-                    )
-                )
-            )
+            tools.append({
+                "type": "function",
+                "function": {
+                    "name": tool["name"],
+                    "description": tool.get("description", ""),
+                    "parameters": tool.get("inputSchema", {"type": "object", "properties": {}})
+                }
+            })
         return tools
 
     def _execute_tool(self, tool_name: str, arguments: dict) -> str:
@@ -85,22 +80,22 @@ class AIFoundryMCPAgent:
     def chat(self, user_message: str) -> str:
         """Send a message and get a response, with tool calling support."""
         # Add user message to history
-        self.messages.append(UserMessage(content=user_message))
+        self.messages.append({"role": "user", "content": user_message})
 
         # System message for context
-        system_msg = SystemMessage(content="""You are a helpful AI assistant with access to Microsoft Learn documentation.
+        system_msg = {"role": "system", "content": """You are a helpful AI assistant with access to Microsoft Learn documentation.
 Use the available tools to search and fetch official Microsoft documentation when users ask about:
 - Azure services and configurations
 - .NET, C#, Python SDKs
 - Microsoft 365, Power Platform
 - Developer tools and best practices
 
-Always cite your sources with documentation URLs when providing information from Microsoft docs.""")
+Always cite your sources with documentation URLs when providing information from Microsoft docs."""}
 
         # Get completion with tools
         tools = self._get_tools()
         
-        response = self.ai_client.complete(
+        response = self.ai_client.chat.completions.create(
             model=self.deployment,
             messages=[system_msg] + self.messages,
             tools=tools if tools else None,
@@ -111,10 +106,20 @@ Always cite your sources with documentation URLs when providing information from
         # Handle tool calls
         while assistant_message.tool_calls:
             # Add assistant message with tool calls
-            self.messages.append(AssistantMessage(
-                content=assistant_message.content or "",
-                tool_calls=assistant_message.tool_calls
-            ))
+            self.messages.append({
+                "role": "assistant",
+                "content": assistant_message.content or "",
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments
+                        }
+                    } for tc in assistant_message.tool_calls
+                ]
+            })
 
             # Execute each tool call
             for tool_call in assistant_message.tool_calls:
@@ -124,13 +129,14 @@ Always cite your sources with documentation URLs when providing information from
                 result = self._execute_tool(tool_name, arguments)
                 
                 # Add tool result to messages
-                self.messages.append(ToolMessage(
-                    tool_call_id=tool_call.id,
-                    content=result
-                ))
+                self.messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": result
+                })
 
             # Get next response
-            response = self.ai_client.complete(
+            response = self.ai_client.chat.completions.create(
                 model=self.deployment,
                 messages=[system_msg] + self.messages,
                 tools=tools,
@@ -139,7 +145,7 @@ Always cite your sources with documentation URLs when providing information from
 
         # Add final assistant message
         final_content = assistant_message.content or ""
-        self.messages.append(AssistantMessage(content=final_content))
+        self.messages.append({"role": "assistant", "content": final_content})
 
         return final_content
 
