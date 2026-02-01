@@ -1,5 +1,5 @@
 """
-Azure AI Foundry + MCP Integration
+Microsoft Foundry + MCP Integration
 
 A Python application that uses Azure OpenAI with
 Microsoft Learn MCP Server for tool calling.
@@ -16,8 +16,8 @@ from mcp_client import MCPClient
 load_dotenv()
 
 
-class AIFoundryMCPAgent:
-    """Agent that combines Azure AI Foundry with MCP tools."""
+class MicrosoftFoundryMCPAgent:
+    """Agent that combines Microsoft Foundry with MCP tools."""
 
     def __init__(self):
         # Azure AI Foundry setup
@@ -157,11 +157,11 @@ Always cite your sources with documentation URLs when providing information from
 def main():
     """Interactive chat loop."""
     print("=" * 60)
-    print("Azure AI Foundry + Microsoft Learn MCP Agent")
+    print("Microsoft Foundry + Microsoft Learn MCP Agent")
     print("=" * 60)
     print("Type 'quit' to exit, 'clear' to reset conversation\n")
 
-    agent = AIFoundryMCPAgent()
+    agent = MicrosoftFoundryMCPAgent()
     
     # Show available tools
     print("📚 Available MCP Tools:")
